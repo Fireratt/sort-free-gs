@@ -41,8 +41,10 @@ class GaussianModel:
         self.rotation_activation = torch.nn.functional.normalize
 
 
-    def __init__(self, sh_degree : int, depth_correct : bool):
+    def __init__(self, sh_degree : int, depth_correct : bool, cpu_offload : bool = False):
         self.depth_correct = depth_correct
+        self.cpu_offload = cpu_offload
+        self._active_gpu_params = None
         self.active_sh_degree = 0
         self.max_sh_degree = sh_degree  
         self._xyz = torch.empty(0)
@@ -127,12 +129,12 @@ class GaussianModel:
                 self.spatial_lr_scale,
             ) = model_args
             self._sigma = nn.Parameter(
-                torch.tensor([10.0], dtype=torch.float32, device="cuda").requires_grad_(
+                torch.tensor([10.0], dtype=torch.float32, device="cpu" if self.cpu_offload else "cuda").requires_grad_(
                     True
                 )
             )
             self._weight_background = nn.Parameter(
-                torch.tensor([0.02], dtype=torch.float32, device="cuda").requires_grad_(
+                torch.tensor([0.02], dtype=torch.float32, device="cpu" if self.cpu_offload else "cuda").requires_grad_(
                     True
                 )
             )
@@ -140,9 +142,18 @@ class GaussianModel:
             raise ValueError(
                 f"Unexpected checkpoint format with {len(model_args)} fields."
             )
+        if self.cpu_offload:
+            parameter_names = ("_xyz", "_features_dc", "_features_rest", "_scaling", "_rotation",
+                               "_opacity", "_features_do", "_features_ro", "_sigma", "_weight_background")
+            for name in parameter_names:
+                value = getattr(self, name)
+                if isinstance(value, torch.Tensor):
+                    setattr(self, name, nn.Parameter(value.detach().cpu(), requires_grad=True))
         self.training_setup(training_args)
-        self.xyz_gradient_accum = xyz_gradient_accum
-        self.denom = denom
+        device = "cpu" if self.cpu_offload else "cuda"
+        self.max_radii2D = self.max_radii2D.to(device)
+        self.xyz_gradient_accum = xyz_gradient_accum.to(device)
+        self.denom = denom.to(device)
 
         if opt_dict is not None:
             self.optimizer.load_state_dict(opt_dict)
@@ -194,6 +205,37 @@ class GaussianModel:
     def get_covariance(self, scaling_modifier = 1):
         return self.covariance_activation(self.get_scaling, scaling_modifier, self._rotation)
 
+    def offload_to_gpu(self):
+        if not self.cpu_offload or self._active_gpu_params is not None:
+            return
+        parameter_names = {
+            "xyz": "_xyz", "f_dc": "_features_dc", "f_rest": "_features_rest",
+            "opacity": "_opacity", "f_do": "_features_do", "f_ro": "_features_ro",
+            "scaling": "_scaling", "rotation": "_rotation", "sigma": "_sigma",
+            "weight_background": "_weight_background",
+        }
+        self._active_gpu_params = {}
+        for group in self.optimizer.param_groups:
+            group_name = group["name"]
+            cpu_param = group["params"][0]
+            gpu_param = nn.Parameter(cpu_param.detach().to("cuda"), requires_grad=True)
+            self._active_gpu_params[group_name] = (cpu_param, gpu_param)
+            setattr(self, parameter_names[group_name], gpu_param)
+
+    def offload_to_cpu(self):
+        if not self.cpu_offload or self._active_gpu_params is None:
+            return
+        parameter_names = {
+            "xyz": "_xyz", "f_dc": "_features_dc", "f_rest": "_features_rest",
+            "opacity": "_opacity", "f_do": "_features_do", "f_ro": "_features_ro",
+            "scaling": "_scaling", "rotation": "_rotation", "sigma": "_sigma",
+            "weight_background": "_weight_background",
+        }
+        for group_name, (cpu_param, gpu_param) in self._active_gpu_params.items():
+            cpu_param.grad = None if gpu_param.grad is None else gpu_param.grad.detach().to("cpu")
+            setattr(self, parameter_names[group_name], cpu_param)
+        self._active_gpu_params = None
+
     def oneupSHdegree(self):
         if self.active_sh_degree < self.max_sh_degree:
             self.active_sh_degree += 1
@@ -239,8 +281,9 @@ class GaussianModel:
 
     def training_setup(self, training_args):
         self.percent_dense = training_args.percent_dense
-        self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-        self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
+        device = "cpu" if self.cpu_offload else "cuda"
+        self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device=device)
+        self.denom = torch.zeros((self.get_xyz.shape[0], 1), device=device)
 
         l = [
             {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},
@@ -346,6 +389,7 @@ class GaussianModel:
 
     def load_ply(self, path):
         plydata = PlyData.read(path)
+        device = "cpu" if self.cpu_offload else "cuda"
         xyz = np.stack((np.asarray(plydata.elements[0]["x"]),
                         np.asarray(plydata.elements[0]["y"]),
                         np.asarray(plydata.elements[0]["z"])),  axis=1)
@@ -399,32 +443,33 @@ class GaussianModel:
             torch.tensor(
                 [plydata.elements[0]["info"][0]],
                 dtype=torch.float32,
-                device="cuda",
+                device=device,
             ).requires_grad_(True)
         )
         self._sigma = nn.Parameter(
             torch.tensor(
                 [plydata.elements[0]["info"][1]],
                 dtype=torch.float32,
-                device="cuda",
+                device=device,
             ).requires_grad_(True)
         )
 
-        self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._features_dc = nn.Parameter(torch.tensor(features_dc, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
-        self._features_rest = nn.Parameter(torch.tensor(features_extra, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
-        self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._features_do = nn.Parameter(torch.tensor(features_do, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
-        self._features_ro = nn.Parameter(torch.tensor(features_ro, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
-        self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device=device).requires_grad_(True))
+        self._features_dc = nn.Parameter(torch.tensor(features_dc, dtype=torch.float, device=device).transpose(1, 2).contiguous().requires_grad_(True))
+        self._features_rest = nn.Parameter(torch.tensor(features_extra, dtype=torch.float, device=device).transpose(1, 2).contiguous().requires_grad_(True))
+        self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device=device).requires_grad_(True))
+        self._features_do = nn.Parameter(torch.tensor(features_do, dtype=torch.float, device=device).transpose(1, 2).contiguous().requires_grad_(True))
+        self._features_ro = nn.Parameter(torch.tensor(features_ro, dtype=torch.float, device=device).transpose(1, 2).contiguous().requires_grad_(True))
+        self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device=device).requires_grad_(True))
+        self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device=device).requires_grad_(True))
         # self._vi = nn.Parameter(torch.tensor(vi, dtype=torch.float, device="cuda").requires_grad_(True))
 
         self.active_sh_degree = self.max_sh_degree
-        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device=device)
     
     def load_3dgs_ply(self, path):
         plydata = PlyData.read(path)
+        device = "cpu" if self.cpu_offload else "cuda"
         xyz = np.stack((np.asarray(plydata.elements[0]["x"]),
                         np.asarray(plydata.elements[0]["y"]),
                         np.asarray(plydata.elements[0]["z"])),  axis=1)
@@ -456,29 +501,29 @@ class GaussianModel:
         for idx, attr_name in enumerate(rot_names):
             rots[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
-        self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._features_dc = nn.Parameter(torch.tensor(features_dc, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
-        self._features_rest = nn.Parameter(torch.tensor(features_extra, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
-        self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
+        self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device=device).requires_grad_(True))
+        self._features_dc = nn.Parameter(torch.tensor(features_dc, dtype=torch.float, device=device).transpose(1, 2).contiguous().requires_grad_(True))
+        self._features_rest = nn.Parameter(torch.tensor(features_extra, dtype=torch.float, device=device).transpose(1, 2).contiguous().requires_grad_(True))
+        self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device=device).requires_grad_(True))
+        self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device=device).requires_grad_(True))
+        self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device=device).requires_grad_(True))
 
         self.active_sh_degree = self.max_sh_degree
         
         # # addition parameters for sortfree
         # sigma and weight_background
-        self._sigma = nn.Parameter(torch.tensor([10.0], dtype=torch.float32, device='cuda'))
-        self._weight_background = nn.Parameter(torch.tensor([0.02], dtype=torch.float32, device='cuda'))
+        self._sigma = nn.Parameter(torch.tensor([10.0], dtype=torch.float32, device=device))
+        self._weight_background = nn.Parameter(torch.tensor([0.02], dtype=torch.float32, device=device))
         
         # sh parameters for Vi
         self.SH_C0 = 0.28209479177387814
-        features_o = torch.zeros((xyz.shape[0], 1, (self.max_sh_degree + 1) ** 2)).float().cuda()
-        features_o[:, :, 0] = 0.1 * torch.ones((xyz.shape[0], 1), dtype=torch.float, device="cuda") / self.SH_C0
+        features_o = torch.zeros((xyz.shape[0], 1, (self.max_sh_degree + 1) ** 2), device=device)
+        features_o[:, :, 0] = 0.1 * torch.ones((xyz.shape[0], 1), dtype=torch.float, device=device) / self.SH_C0
         self._features_do = nn.Parameter(features_o[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
         self._features_ro = nn.Parameter(features_o[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))
         
         # max_radii2D
-        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device=device)
 
     def replace_tensor_to_optimizer(self, tensor, name):
         optimizable_tensors = {}

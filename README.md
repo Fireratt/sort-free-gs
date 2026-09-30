@@ -148,11 +148,15 @@ The convenience script defaults to `../res/training/tanksandtemples/train` and w
 
 ```shell
 python train.py --eval -s <path to COLMAP or NeRF Synthetic dataset> -m <path to output> --depth_correct
+# Enable CPU offload to keep Gaussian parameters and Adam state in system memory:
+python train.py --eval -s <path to COLMAP or NeRF Synthetic dataset> -m <path to output> --depth_correct --cpu_offload
 python render.py --eval -s <path to COLMAP or NeRF Synthetic dataset> -m <path to output root> --iteration <iteration> --depth_correct --store_image
 # `-m` must be the training output root containing cfg_args, not point_cloud/iteration_x.
 # To render the latest checkpoint, omit --iteration or use --iteration -1.
 python metrics.py -m <path to output>
 ```
+
+`--cpu_offload` keeps Gaussian parameters and Adam optimizer state in system memory, transfers parameters to CUDA for each forward/backward pass, then copies gradients back for the CPU optimizer step. Densification is disabled in this mode. The renderer still requires all Gaussian parameters and gradients for the current pass to fit in GPU memory, so this reduces optimizer-state memory but does not support a model whose Gaussian parameters alone exceed GPU capacity. CPU RAM must hold the parameters and optimizer state.
 
 ## LICENSE
 

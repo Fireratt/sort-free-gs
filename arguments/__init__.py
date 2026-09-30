@@ -64,6 +64,7 @@ class ModelParams(ParamGroup):
         self.eval = False
         
         self.depth_correct = False
+        self.cpu_offload = False
         
         super().__init__(parser, "Loading Parameters", sentinel)
 
