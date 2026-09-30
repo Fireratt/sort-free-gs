@@ -13,7 +13,7 @@ import torch
 import math
 from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
 from scene.gaussian_model import GaussianModel
-from utils.sh_utils import eval_sh
+from utils.sh_utils import eval_sh, eval_sh_split
 
 def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None, opacity_modifier = 1.0):
     """
@@ -58,7 +58,8 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     sigma = pc.get_sigma
     weight_background = pc.get_weight_background
     another_sh = pc.get_another_sh
-    dir_pp = (pc.get_xyz - viewpoint_camera.camera_center.repeat(pc.get_features.shape[0], 1))
+    num_points = pc.get_xyz.shape[0]
+    dir_pp = pc.get_xyz - viewpoint_camera.camera_center.repeat(num_points, 1)
     dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
     another_sh_output = eval_sh(pc.active_sh_degree, another_sh.permute([0,2,1]), dir_pp_normalized)
 
@@ -75,17 +76,21 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
 
     # If precomputed colors are provided, use them. Otherwise, if it is desired to precompute colors
     # from SHs in Python, do it. If not, then SH -> RGB conversion will be done by rasterizer.
-    shs = None
+    features_dc = None
+    features_rest = None
     colors_precomp = None
     if override_color is None:
         if pipe.convert_SHs_python:
-            shs_view = pc.get_features.transpose(1, 2).view(-1, 3, (pc.max_sh_degree+1)**2)
-            dir_pp = (pc.get_xyz - viewpoint_camera.camera_center.repeat(pc.get_features.shape[0], 1))
-            dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True)
-            sh2rgb = eval_sh(pc.active_sh_degree, shs_view, dir_pp_normalized)
+            sh2rgb = eval_sh_split(
+                pc.active_sh_degree,
+                pc._features_dc.transpose(1, 2),
+                pc._features_rest.transpose(1, 2),
+                dir_pp_normalized,
+            )
             colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
         else:
-            shs = pc.get_features
+            features_dc = pc._features_dc
+            features_rest = pc._features_rest
     else:
         colors_precomp = override_color
 
@@ -100,7 +105,8 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
         weight_background=weight_background,
         means3D = means3D,
         means2D = means2D,
-        shs = shs,
+        features_dc = features_dc,
+        features_rest = features_rest,
         colors_precomp = colors_precomp,
         opacities = opacities,
         vi=vi,

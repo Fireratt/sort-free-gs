@@ -111,6 +111,50 @@ def eval_sh(deg, sh, dirs):
                             C4[8] * (xx * (xx - 3 * yy) - yy * (3 * xx - yy)) * sh[..., 24])
     return result
 
+
+def eval_sh_split(deg, features_dc, features_rest, dirs):
+    """Evaluate color SH tensors stored as separate DC and remaining bands."""
+    assert 0 <= deg <= 4
+    rest = lambda coeff: features_rest[..., coeff - 1]
+    x, y, z = dirs[..., 0], dirs[..., 1], dirs[..., 2]
+    result = C0 * features_dc[..., 0]
+
+    if deg > 0:
+        result = result - C1 * y[..., None] * rest(1) + C1 * z[..., None] * rest(2) - C1 * x[..., None] * rest(3)
+        if deg > 1:
+            xx, yy, zz = x * x, y * y, z * z
+            xy, yz, xz = x * y, y * z, x * z
+            result = result + (
+                C2[0] * xy[..., None] * rest(4)
+                + C2[1] * yz[..., None] * rest(5)
+                + C2[2] * (2.0 * zz - xx - yy)[..., None] * rest(6)
+                + C2[3] * xz[..., None] * rest(7)
+                + C2[4] * (xx - yy)[..., None] * rest(8)
+            )
+            if deg > 2:
+                result = result + (
+                    C3[0] * (y * (3 * xx - yy))[..., None] * rest(9)
+                    + C3[1] * (xy * z)[..., None] * rest(10)
+                    + C3[2] * (y * (4 * zz - xx - yy))[..., None] * rest(11)
+                    + C3[3] * (z * (2 * zz - 3 * xx - 3 * yy))[..., None] * rest(12)
+                    + C3[4] * (x * (4 * zz - xx - yy))[..., None] * rest(13)
+                    + C3[5] * (z * (xx - yy))[..., None] * rest(14)
+                    + C3[6] * (x * (xx - 3 * yy))[..., None] * rest(15)
+                )
+                if deg > 3:
+                    result = result + (
+                        C4[0] * (xy * (xx - yy))[..., None] * rest(16)
+                        + C4[1] * (yz * (3 * xx - yy))[..., None] * rest(17)
+                        + C4[2] * (xy * (7 * zz - 1))[..., None] * rest(18)
+                        + C4[3] * (yz * (7 * zz - 3))[..., None] * rest(19)
+                        + C4[4] * (zz * (35 * zz - 30) + 3)[..., None] * rest(20)
+                        + C4[5] * (xz * (7 * zz - 3))[..., None] * rest(21)
+                        + C4[6] * ((xx - yy) * (7 * zz - 1))[..., None] * rest(22)
+                        + C4[7] * (xz * (xx - 3 * yy))[..., None] * rest(23)
+                        + C4[8] * (xx * (xx - 3 * yy) - yy * (3 * xx - yy))[..., None] * rest(24)
+                    )
+    return result
+
 def RGB2SH(rgb):
     return (rgb - 0.5) / C0
 

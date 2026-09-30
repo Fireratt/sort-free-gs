@@ -183,13 +183,6 @@ class GaussianModel:
         return self._xyz
     
     @property
-    def get_features(self):
-        features_dc = self._features_dc
-        features_rest = self._features_rest
-        sh_color = torch.cat((features_dc, features_rest), dim=1)
-        return sh_color
-
-    @property
     def get_another_sh(self):
         features_do = self._features_do
         features_ro = self._features_ro
