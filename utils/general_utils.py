@@ -14,6 +14,8 @@ import sys
 from datetime import datetime
 import numpy as np
 import random
+import os
+from PIL import Image
 
 def inverse_sigmoid(x):
     return torch.log(x/(1-x))
@@ -25,6 +27,48 @@ def PILtoTorch(pil_image, resolution):
         return resized_image.permute(2, 0, 1)
     else:
         return resized_image.unsqueeze(dim=-1).permute(2, 0, 1)
+
+
+def prepare_image_for_training(pil_image, white_background):
+    if pil_image.mode == "RGB":
+        return pil_image
+
+    if pil_image.mode in ("RGBA", "LA") or "transparency" in pil_image.info:
+        rgba_image = pil_image.convert("RGBA")
+        background = Image.new(
+            "RGBA",
+            rgba_image.size,
+            (255, 255, 255, 255) if white_background else (0, 0, 0, 255),
+        )
+        return Image.alpha_composite(background, rgba_image).convert("RGB")
+
+    return pil_image.convert("RGB")
+
+
+def load_image_tensor_from_path(image_path, resolution, white_background):
+    disk_image = Image.open(image_path)
+    prepared_image = disk_image
+    try:
+        prepared_image = prepare_image_for_training(disk_image, white_background)
+        return PILtoTorch(prepared_image, resolution).contiguous()
+    finally:
+        if prepared_image is not disk_image:
+            prepared_image.close()
+        disk_image.close()
+
+
+def get_available_cpu_memory_gb():
+    meminfo_path = "/proc/meminfo"
+    if os.path.exists(meminfo_path):
+        with open(meminfo_path, "r") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    available_kb = float(line.split()[1])
+                    return available_kb / 1024 / 1024
+
+    page_size = os.sysconf("SC_PAGE_SIZE")
+    available_pages = os.sysconf("SC_AVPHYS_PAGES")
+    return page_size * available_pages / 1024 / 1024 / 1024
 
 def get_expon_lr_func(
     lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000

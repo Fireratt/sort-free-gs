@@ -53,20 +53,46 @@ This modification allows us to experiment with the impact of depth correction on
 
 ## Install
 
-We tested on a server configured with Ubuntu 22.04, CUDA 11.8. 
+This project depends on two CUDA extension submodules: `submodules/simple-knn` and `submodules/diff-gaussian-rasterization`. The included `environment.yml` targets the CUDA 12.4 setup used for this workspace. If your machine uses a different CUDA toolkit, keep `pytorch-cuda` aligned with `nvcc --version`.
 
-1. Clone this repo:
+1. Clone this repo with submodules:
 
-```
-git clone --recursive https://github.com/LiYukeee/sort-free-gs.git --recursive
+```shell
+git clone --recursive https://github.com/LiYukeee/sort-free-gs.git
 cd sort-free-gs
 ```
 
-2. Install dependencies
+If you already cloned without submodules:
 
+```shell
+git submodule update --init --recursive
 ```
+
+2. Recreate and activate the conda environment:
+
+```shell
+conda env remove -n sortfree
 conda env create --file environment.yml
 conda activate sortfree
+```
+
+If `sortfree` does not exist yet, skip the remove command.
+
+3. Build the local CUDA extensions:
+
+```shell
+export TORCH_CUDA_ARCH_LIST="8.6"
+export MAX_JOBS=4
+pip install --no-build-isolation submodules/simple-knn
+pip install --no-build-isolation submodules/diff-gaussian-rasterization
+```
+
+For GPUs other than RTX 3090, change `TORCH_CUDA_ARCH_LIST` or omit it.
+
+4. Verify the installation:
+
+```shell
+python -c "import simple_knn; from diff_gaussian_rasterization import GaussianRasterizer; print('extensions ok')"
 ```
 
 ## Data
@@ -112,10 +138,19 @@ bash train_mipnerf360.sh
 ```
 
 ### Single Scene
+The convenience script defaults to `../res/training/tanksandtemples/train` and writes to `./trained`. You can override both paths:
+
+```shell
+./train.sh <path to COLMAP or NeRF Synthetic dataset> <path to output>
+./render.sh <path to COLMAP or NeRF Synthetic dataset> <path to output root> <iteration>
+```
+
 
 ```shell
 python train.py --eval -s <path to COLMAP or NeRF Synthetic dataset> -m <path to output> --depth_correct
-python render.py -m <path to output>
+python render.py --eval -s <path to COLMAP or NeRF Synthetic dataset> -m <path to output root> --iteration <iteration> --depth_correct --store_image
+# `-m` must be the training output root containing cfg_args, not point_cloud/iteration_x.
+# To render the latest checkpoint, omit --iteration or use --iteration -1.
 python metrics.py -m <path to output>
 ```
 

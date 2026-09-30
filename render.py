@@ -26,6 +26,33 @@ import time
 import numpy as np
 
 
+def parse_render_resolution(spec):
+    if spec is None:
+        return None
+
+    normalized = str(spec).lower().replace(" ", "")
+    if "x" not in normalized:
+        raise ValueError(
+            f"Explicit render resolution must use WIDTHxHEIGHT, got: {spec}"
+        )
+
+    width_text, height_text = normalized.split("x", 1)
+    width = int(width_text)
+    height = int(height_text)
+    if width <= 0 or height <= 0:
+        raise ValueError("Render width and height must be positive")
+    return width, height
+
+
+def set_render_resolution(views, resolution):
+    if resolution is None:
+        return
+    width, height = resolution
+    for view in views:
+        view.image_width = width
+        view.image_height = height
+
+
 def render_set_for_FPS_test(args, model_path, name, iteration, views, gaussians, pipeline, background):
     """
     input: Keep the same input parameters as render_set(...)
@@ -42,7 +69,7 @@ def render_set_for_FPS_test(args, model_path, name, iteration, views, gaussians,
             step += 1
             torch.cuda.synchronize();
             t0 = time.time()
-            rendering = render(view, gaussians, pipeline, background)["render"]
+            rendering = render(view, gaussians, pipeline, background, opacity_modifier=args.opacity)["render"]
             torch.cuda.synchronize();
             t1 = time.time()
             t_list[step % t_list_len] = t1 - t0
@@ -70,7 +97,7 @@ def render_set(args, model_path, name, iteration, views, gaussians, pipeline, ba
     psnr_test = 0.0
 
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
-        rendering = render(view, gaussians, pipeline, background)["render"]
+        rendering = render(view, gaussians, pipeline, background, opacity_modifier=args.opacity)["render"]
         gt = view.original_image[0:3, :, :].cuda()
         # error_map = torch.mean(torch.abs(rendering - gt), dim=0)
         error_map = torch.abs(rendering - gt)
@@ -85,17 +112,22 @@ def render_set(args, model_path, name, iteration, views, gaussians, pipeline, ba
 def render_sets(args, dataset : ModelParams, iteration : int, pipeline : PipelineParams, skip_train : bool, skip_test : bool):
     with torch.no_grad():
         gaussians = GaussianModel(dataset.sh_degree, dataset.depth_correct)
+
         scene = Scene(dataset, gaussians, load_iteration=iteration, shuffle=False)
+        render_resolution = parse_render_resolution(args.render_resolution)
 
         bg_color = [1,1,1] if dataset.white_background else [0, 0, 0]
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
         if not skip_train:
+             set_render_resolution(scene.getTrainCameras(), render_resolution)
              render_set(args, dataset.model_path, "train", scene.loaded_iter, scene.getTrainCameras(), gaussians, pipeline, background)
 
         if not skip_test:
+             set_render_resolution(scene.getTestCameras(), render_resolution)
              render_set(args, dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background)
-        
+
+        set_render_resolution(scene.getTestCameras(), render_resolution)
         render_set_for_FPS_test(args, dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background)
 
 if __name__ == "__main__":
@@ -108,7 +140,25 @@ if __name__ == "__main__":
     parser.add_argument("--skip_test", action="store_true")
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--store_image", action='store_true', default=False)  # store render image
+    parser.add_argument(
+        "--opacity", type=float, default=1.0,
+        help="Multiply Gaussian opacity before rasterization; 0 is transparent and 1 keeps the trained opacity.",
+    )
+    parser.add_argument(
+        "--render_resolution",
+        default=None,
+        help="Explicit output size as WIDTHxHEIGHT, e.g. 3840x2160.",
+    )
     args = get_combined_args(parser)
+    if not 0.0 <= args.opacity <= 1.0:
+        parser.error("--opacity must be in [0, 1]")
+    if args.render_resolution is not None:
+        try:
+            parse_render_resolution(args.render_resolution)
+        except ValueError as error:
+            parser.error(str(error))
+        # Lazy loading makes the ground-truth image follow the resized camera.
+        args.image_loading_mode = "lazy"
     print("Rendering " + args.model_path)
 
     # Initialize system state (RNG)

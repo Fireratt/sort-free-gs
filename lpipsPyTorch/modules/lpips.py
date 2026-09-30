@@ -25,6 +25,7 @@ class LPIPS(nn.Module):
 
         # linear layers
         self.lin = LinLayers(self.net.n_channels_list)
+
         self.lin.load_state_dict(get_state_dict(net_type, version))
 
     def forward(self, x: torch.Tensor, y: torch.Tensor):

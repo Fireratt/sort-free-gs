@@ -11,14 +11,12 @@
 
 from scene.cameras import Camera
 import numpy as np
-from utils.general_utils import PILtoTorch
+from utils.general_utils import load_image_tensor_from_path
 from utils.graphics_utils import fov2focal
 
 WARNED = False
 
-def loadCam(args, id, cam_info, resolution_scale):
-    orig_w, orig_h = cam_info.image.size
-
+def resolve_resolution(args, orig_w, orig_h, resolution_scale):
     if args.resolution in [1, 2, 4, 8]:
         resolution = round(orig_w/(resolution_scale * args.resolution)), round(orig_h/(resolution_scale * args.resolution))
     else:  # should be a type that converts to float
@@ -38,11 +36,26 @@ def loadCam(args, id, cam_info, resolution_scale):
         scale = float(global_down) * float(resolution_scale)
         resolution = (int(orig_w / scale), int(orig_h / scale))
 
+    return resolution
+
+
+def loadCam(args, id, cam_info, resolution_scale):
+    orig_w, orig_h = cam_info.width, cam_info.height
+    resolution = resolve_resolution(args, orig_w, orig_h, resolution_scale)
+
+    image = None
+    if not args.lazy_image_loading:
+        image = load_image_tensor_from_path(
+            cam_info.image_path, resolution, args.white_background
+        )
+
     return Camera(colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T, 
                   FoVx=cam_info.FovX, FoVy=cam_info.FovY, 
-                  image=cam_info.image, gt_alpha_mask=None,
+                  image=image, gt_alpha_mask=None,
                   image_name=cam_info.image_name, resolution_scale=resolution_scale, 
-                  uid=id, data_device=args.data_device, resolution=resolution)
+                  uid=id, data_device=args.data_device, resolution=resolution,
+                  image_path=cam_info.image_path, white_background=args.white_background,
+                  lazy_load_image=args.lazy_image_loading)
 
 def cameraList_from_camInfos(cam_infos, resolution_scale, args):
     camera_list = []

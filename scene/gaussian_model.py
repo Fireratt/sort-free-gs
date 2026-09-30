@@ -80,6 +80,8 @@ class GaussianModel:
             self._opacity,
             self._features_do,
             self._features_ro,
+            self._sigma,
+            self._weight_background,
             self.max_radii2D,
             self.xyz_gradient_accum,
             self.denom,
@@ -88,24 +90,62 @@ class GaussianModel:
         )
     
     def restore(self, model_args, training_args):
-        (self.active_sh_degree, 
-        self._xyz, 
-        self._features_dc, 
-        self._features_rest,
-        self._scaling, 
-        self._rotation, 
-        self._opacity,
-        self._features_do,
-        self._features_ro,
-        self.max_radii2D, 
-        xyz_gradient_accum, 
-        denom,
-        opt_dict, 
-        self.spatial_lr_scale) = model_args
+        if len(model_args) == 16:
+            (
+                self.active_sh_degree,
+                self._xyz,
+                self._features_dc,
+                self._features_rest,
+                self._scaling,
+                self._rotation,
+                self._opacity,
+                self._features_do,
+                self._features_ro,
+                self._sigma,
+                self._weight_background,
+                self.max_radii2D,
+                xyz_gradient_accum,
+                denom,
+                opt_dict,
+                self.spatial_lr_scale,
+            ) = model_args
+        elif len(model_args) == 14:
+            (
+                self.active_sh_degree,
+                self._xyz,
+                self._features_dc,
+                self._features_rest,
+                self._scaling,
+                self._rotation,
+                self._opacity,
+                self._features_do,
+                self._features_ro,
+                self.max_radii2D,
+                xyz_gradient_accum,
+                denom,
+                opt_dict,
+                self.spatial_lr_scale,
+            ) = model_args
+            self._sigma = nn.Parameter(
+                torch.tensor([10.0], dtype=torch.float32, device="cuda").requires_grad_(
+                    True
+                )
+            )
+            self._weight_background = nn.Parameter(
+                torch.tensor([0.02], dtype=torch.float32, device="cuda").requires_grad_(
+                    True
+                )
+            )
+        else:
+            raise ValueError(
+                f"Unexpected checkpoint format with {len(model_args)} fields."
+            )
         self.training_setup(training_args)
         self.xyz_gradient_accum = xyz_gradient_accum
         self.denom = denom
-        self.optimizer.load_state_dict(opt_dict)
+
+        if opt_dict is not None:
+            self.optimizer.load_state_dict(opt_dict)
 
     @property
     def get_sigma(self):
@@ -306,7 +346,6 @@ class GaussianModel:
 
     def load_ply(self, path):
         plydata = PlyData.read(path)
-
         xyz = np.stack((np.asarray(plydata.elements[0]["x"]),
                         np.asarray(plydata.elements[0]["y"]),
                         np.asarray(plydata.elements[0]["z"])),  axis=1)
@@ -356,8 +395,20 @@ class GaussianModel:
         #     vi[:, idx] = np.asarray(plydata.elements[0][attr_name]).astype(np.float32)
         # vi = vi.reshape((vi.shape[0], -1))
 
-        self._weight_background = torch.tensor([plydata.elements[0]["info"][0]]).float()
-        self._sigma = torch.tensor([plydata.elements[0]["info"][1]]).float()
+        self._weight_background = nn.Parameter(
+            torch.tensor(
+                [plydata.elements[0]["info"][0]],
+                dtype=torch.float32,
+                device="cuda",
+            ).requires_grad_(True)
+        )
+        self._sigma = nn.Parameter(
+            torch.tensor(
+                [plydata.elements[0]["info"][1]],
+                dtype=torch.float32,
+                device="cuda",
+            ).requires_grad_(True)
+        )
 
         self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True))
         self._features_dc = nn.Parameter(torch.tensor(features_dc, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
@@ -369,11 +420,11 @@ class GaussianModel:
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
         # self._vi = nn.Parameter(torch.tensor(vi, dtype=torch.float, device="cuda").requires_grad_(True))
 
-        self.active_sh_degree = self.max_sh_degree    
+        self.active_sh_degree = self.max_sh_degree
+        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
     
     def load_3dgs_ply(self, path):
         plydata = PlyData.read(path)
-
         xyz = np.stack((np.asarray(plydata.elements[0]["x"]),
                         np.asarray(plydata.elements[0]["y"]),
                         np.asarray(plydata.elements[0]["z"])),  axis=1)

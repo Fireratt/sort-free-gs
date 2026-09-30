@@ -174,3 +174,9 @@ data
 data/
 outputs/
 .vscode/
+*.log
+__pycache__
+.vscode
+conda
+output
+trained

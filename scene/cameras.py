@@ -13,12 +13,13 @@ import torch
 from torch import nn
 import numpy as np
 from utils.graphics_utils import getWorld2View2, getProjectionMatrix
-from utils.general_utils import PILtoTorch
+from utils.general_utils import load_image_tensor_from_path
 
 class Camera(nn.Module):
     def __init__(self, colmap_id, R, T, FoVx, FoVy, image, gt_alpha_mask,
                  image_name, resolution_scale, uid,
-                 trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", resolution=None
+                 trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda", resolution=None,
+                 image_path=None, white_background=False, lazy_load_image=False
                  ):
         super(Camera, self).__init__()
 
@@ -31,6 +32,9 @@ class Camera(nn.Module):
         self.image_name = image_name
         self.resolution_scale = resolution_scale
         self.gt_alpha_mask = gt_alpha_mask
+        self.image_path = image_path
+        self.white_background = white_background
+        self.lazy_load_image = lazy_load_image
 
         if data_device != 'disk':
             try:
@@ -45,21 +49,13 @@ class Camera(nn.Module):
         self.image_width = resolution[0]
         self.image_height = resolution[1]
         
-        if data_device != "disk":
-            
-            resized_image_rgb = PILtoTorch(image, resolution)
-            gt_image = resized_image_rgb[:3, ...]
-            loaded_mask = None
-            if resized_image_rgb.shape[0] == 4:
-                loaded_mask = resized_image_rgb[3:4, ...]
-            self.gt_alpha_mask = loaded_mask
-            self.gt_image = gt_image.clamp(0.0, 1.0).to(self.data_device)
-            if gt_alpha_mask is not None:
-                self.gt_image *= gt_alpha_mask.to(self.data_device)
-            else:
-                self.gt_image *= torch.ones((1, self.image_height, self.image_width), device=self.data_device)
+        if not self.lazy_load_image:
+            assert image is not None, "Eager image loading expects a preloaded tensor."
+            self.gt_image = image[:3, ...].clamp(0.0, 1.0).contiguous()
+            if self.data_device != "disk":
+                self.gt_image = self.gt_image.to(self.data_device)
         else:
-            self.image = image
+            self.gt_image = None
             
             
         self.zfar = 100.0
@@ -75,12 +71,17 @@ class Camera(nn.Module):
     
     @property
     def original_image(self):
-        if self.data_device == "disk":
-            image = self.image
-            # image_path = image.filename
-            return PILtoTorch(image, image.size)[:3, ...]
-        else:
-            return self.gt_image            
+        if self.gt_image is not None:
+            return self.gt_image
+
+        image = load_image_tensor_from_path(
+            self.image_path,
+            (self.image_width, self.image_height),
+            self.white_background,
+        )[:3, ...]
+        if self.data_device != "disk":
+            image = image.to(self.data_device)
+        return image
 
 class MiniCam:
     def __init__(self, width, height, fovy, fovx, znear, zfar, world_view_transform, full_proj_transform):
@@ -94,4 +95,3 @@ class MiniCam:
         self.full_proj_transform = full_proj_transform
         view_inv = torch.inverse(self.world_view_transform)
         self.camera_center = view_inv[3][:3]
-

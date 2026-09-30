@@ -39,11 +39,16 @@ class ParamGroup:
 
     def extract(self, args):
         group = GroupParams()
-        for arg in vars(args).items():
-            if arg[0] in vars(self) or ("_" + arg[0]) in vars(self):
-                setattr(group, arg[0], arg[1])
-        return group
 
+        for key, value in vars(self).items():
+            real_key = key.lstrip("_")
+
+            if hasattr(args, real_key):
+                setattr(group, real_key, getattr(args, real_key))
+            else:
+                setattr(group, real_key, value)
+
+        return group
 class ModelParams(ParamGroup): 
     def __init__(self, parser, sentinel=False):
         self.sh_degree = 3
@@ -53,6 +58,9 @@ class ModelParams(ParamGroup):
         self._resolution = -1
         self._white_background = False
         self.data_device = "cuda"
+        self.image_loading_mode = "auto"
+        self.image_loading_auto_ram_budget_ratio = 0.5
+        self.preload_dataset_to_gpu_threshold = 10.0
         self.eval = False
         
         self.depth_correct = False
