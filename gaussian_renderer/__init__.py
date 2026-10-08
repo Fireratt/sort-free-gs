@@ -13,7 +13,7 @@ import torch
 import math
 from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer
 from scene.gaussian_model import GaussianModel
-from utils.sh_utils import eval_sh, eval_sh_split
+from utils.sh_utils import eval_sh_split
 
 def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, scaling_modifier = 1.0, override_color = None, opacity_modifier = 1.0):
     """
@@ -23,7 +23,12 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     """
  
     # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
-    screenspace_points = torch.zeros_like(pc.get_xyz, dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda") + 0
+    screenspace_points = torch.zeros_like(
+        pc.get_xyz,
+        dtype=pc.get_xyz.dtype,
+        requires_grad=pc.get_xyz.requires_grad,
+        device="cuda",
+    ) + 0
     try:
         screenspace_points.retain_grad()
     except:
@@ -57,11 +62,14 @@ def render(viewpoint_camera, pc : GaussianModel, pipe, bg_color : torch.Tensor, 
     # LC-WSR
     sigma = pc.get_sigma
     weight_background = pc.get_weight_background
-    another_sh = pc.get_another_sh
-    num_points = pc.get_xyz.shape[0]
-    dir_pp = pc.get_xyz - viewpoint_camera.camera_center.repeat(num_points, 1)
+    dir_pp = pc.get_xyz - viewpoint_camera.camera_center
     dir_pp_normalized = dir_pp / dir_pp.norm(dim=1, keepdim=True)
-    another_sh_output = eval_sh(pc.active_sh_degree, another_sh.permute([0,2,1]), dir_pp_normalized)
+    another_sh_output = eval_sh_split(
+        pc.active_sh_degree,
+        pc._features_do.transpose(1, 2),
+        pc._features_ro.transpose(1, 2),
+        dir_pp_normalized,
+    )
 
     # If precomputed 3d covariance is provided, use it. If not, then it will be computed from
     # scaling / rotation by the rasterizer.

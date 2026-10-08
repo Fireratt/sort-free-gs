@@ -148,7 +148,7 @@ class GaussianModel:
             for name in parameter_names:
                 value = getattr(self, name)
                 if isinstance(value, torch.Tensor):
-                    setattr(self, name, nn.Parameter(value.detach().cpu(), requires_grad=True))
+                    setattr(self, name, nn.Parameter(value.detach().cpu(), requires_grad=value.requires_grad))
         self.training_setup(training_args)
         device = "cpu" if self.cpu_offload else "cuda"
         self.max_radii2D = self.max_radii2D.to(device)
@@ -156,7 +156,28 @@ class GaussianModel:
         self.denom = denom.to(device)
 
         if opt_dict is not None:
-            self.optimizer.load_state_dict(opt_dict)
+            if training_args.freeze_gaussians:
+                saved_groups = {group.get("name"): group for group in opt_dict["param_groups"]}
+                current_state = self.optimizer.state_dict()
+                filtered_state = {"state": {}, "param_groups": current_state["param_groups"]}
+                for current_group in filtered_state["param_groups"]:
+                    saved_group = saved_groups.get(current_group.get("name"))
+                    if saved_group is None:
+                        continue
+                    new_param_ids = current_group["params"]
+                    old_param_ids = saved_group["params"]
+                    if len(new_param_ids) != len(old_param_ids):
+                        continue
+                    current_group.update({
+                        key: value for key, value in saved_group.items()
+                        if key not in {"params", "name"}
+                    })
+                    for new_id, old_id in zip(new_param_ids, old_param_ids):
+                        if old_id in opt_dict["state"]:
+                            filtered_state["state"][new_id] = opt_dict["state"][old_id]
+                self.optimizer.load_state_dict(filtered_state)
+            else:
+                self.optimizer.load_state_dict(opt_dict)
 
     @property
     def get_sigma(self):
@@ -201,32 +222,27 @@ class GaussianModel:
     def offload_to_gpu(self):
         if not self.cpu_offload or self._active_gpu_params is not None:
             return
-        parameter_names = {
-            "xyz": "_xyz", "f_dc": "_features_dc", "f_rest": "_features_rest",
-            "opacity": "_opacity", "f_do": "_features_do", "f_ro": "_features_ro",
-            "scaling": "_scaling", "rotation": "_rotation", "sigma": "_sigma",
-            "weight_background": "_weight_background",
-        }
+        parameter_names = (
+            "_xyz", "_features_dc", "_features_rest", "_opacity", "_features_do",
+            "_features_ro", "_scaling", "_rotation", "_sigma", "_weight_background",
+        )
         self._active_gpu_params = {}
-        for group in self.optimizer.param_groups:
-            group_name = group["name"]
-            cpu_param = group["params"][0]
-            gpu_param = nn.Parameter(cpu_param.detach().to("cuda"), requires_grad=True)
-            self._active_gpu_params[group_name] = (cpu_param, gpu_param)
-            setattr(self, parameter_names[group_name], gpu_param)
+        for name in parameter_names:
+            cpu_param = getattr(self, name)
+            gpu_param = nn.Parameter(
+                cpu_param.detach().to("cuda"), requires_grad=cpu_param.requires_grad
+            )
+            self._active_gpu_params[name] = (cpu_param, gpu_param)
+            setattr(self, name, gpu_param)
 
     def offload_to_cpu(self):
         if not self.cpu_offload or self._active_gpu_params is None:
             return
-        parameter_names = {
-            "xyz": "_xyz", "f_dc": "_features_dc", "f_rest": "_features_rest",
-            "opacity": "_opacity", "f_do": "_features_do", "f_ro": "_features_ro",
-            "scaling": "_scaling", "rotation": "_rotation", "sigma": "_sigma",
-            "weight_background": "_weight_background",
-        }
-        for group_name, (cpu_param, gpu_param) in self._active_gpu_params.items():
-            cpu_param.grad = None if gpu_param.grad is None else gpu_param.grad.detach().to("cpu")
-            setattr(self, parameter_names[group_name], cpu_param)
+        for name, (cpu_param, gpu_param) in self._active_gpu_params.items():
+            cpu_param.grad = (
+                None if gpu_param.grad is None else gpu_param.grad.detach().to("cpu")
+            )
+            setattr(self, name, cpu_param)
         self._active_gpu_params = None
 
     def oneupSHdegree(self):
@@ -278,7 +294,18 @@ class GaussianModel:
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device=device)
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device=device)
 
-        l = [
+        gaussian_params = (
+            self._xyz, self._features_dc, self._features_rest, self._opacity,
+            self._scaling, self._rotation,
+        )
+        for param in gaussian_params:
+            param.requires_grad_(not training_args.freeze_gaussians)
+        self._features_do.requires_grad_(True)
+        self._features_ro.requires_grad_(True)
+        self._sigma.requires_grad_(True)
+        self._weight_background.requires_grad_(True)
+
+        all_groups = [
             {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},
             {'params': [self._features_dc], 'lr': training_args.feature_lr, "name": "f_dc"},
             {'params': [self._features_rest], 'lr': training_args.feature_lr / 20.0, "name": "f_rest"},
@@ -292,6 +319,12 @@ class GaussianModel:
             {'params': [self._sigma], 'lr': training_args.sigma_lr * self.spatial_lr_scale, "name": "sigma"},
             {'params': [self._weight_background], 'lr': training_args.bg_weight_lr_init, "name": "weight_background"},
         ]
+        if training_args.freeze_gaussians:
+            l = [group for group in all_groups if group["name"] in {
+                "f_do", "f_ro", "sigma", "weight_background"
+            }]
+        else:
+            l = all_groups
 
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
         self.xyz_scheduler_args = get_expon_lr_func(lr_init=training_args.position_lr_init*self.spatial_lr_scale,

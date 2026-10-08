@@ -98,6 +98,7 @@ class OptimizationParams(ParamGroup):
         self.sigma_lr_delay_mult = 0.01
         self.sigma_lr_max_steps = 30_000
         self.bg_weight_lr_init = 0.01
+        self.freeze_gaussians = False
         # #########
         self.percent_dense = 0.01
         self.lambda_dssim = 0.2

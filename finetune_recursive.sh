@@ -3,8 +3,8 @@
 set -euo pipefail
 
 # ========== 配置区 ==========
-ITERATIONS=20000        # 续训迭代数，通常5k-10k足够收敛新参数
-TARGET_ITERATIONS=70000 # 目标模型轮数
+ITERATIONS=10000        # 续训迭代数，通常5k-10k足够收敛新参数
+TARGET_ITERATIONS=30000 # 目标模型轮数
 # ============================
 
 # ========== 环境变量 → 可选参数映射 ==========
@@ -15,6 +15,7 @@ EXTRA_TRAIN_ARGS=()
 # 如需更多开关，在此追加即可，例如：
 [[ "${ENABLE_LAZY_LOAD:-}" == "1" ]] && EXTRA_TRAIN_ARGS+=(--image_loading_mode lazy)
 [[ "${ENABLE_CPU_OFFLOAD:-}" == "1" ]] && EXTRA_TRAIN_ARGS+=(--cpu_offload)
+[[ "${ENABLE_FREEZE_GAUSSIANS:-}" == "1" ]] && EXTRA_TRAIN_ARGS+=(--freeze_gaussians)
 
 # ================================================
 
@@ -37,6 +38,7 @@ usage() {
     echo "  ENABLE_DEPTH_CORRECT   Pass --depth_correct to train.py"
     echo "  ENABLE_EVAL            Pass --eval to train.py"
     echo "  ENABLE_QUIET           Pass --quiet to train.py"
+    echo "  ENABLE_FREEZE_GAUSSIANS Pass --freeze_gaussians to train.py"
     echo
     echo "Examples:"
     echo "  $0 /path/to/stump"
@@ -111,7 +113,7 @@ train_one() {
         --iterations "${ITERATIONS}" \
         --save_iterations "${ITERATIONS}" \
         --densify_until_iter 0 \
-        --test_iterations 500 1500 2500 \
+        --test_iterations 2500 10000 20000 30000 "${ITERATIONS}" \
         "${EXTRA_TRAIN_ARGS[@]}" \
         2>&1 | tee "${model_path}/train.log"
 

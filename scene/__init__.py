@@ -131,7 +131,7 @@ class Scene:
             print("Loading Test Cameras")
             self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args)
         # @Hint: When finetuning , load_ply_from_3dgs == True . Else , it should be false
-        load_ply_from_3dgs = True
+        load_ply_from_3dgs = False
         if load_ply_from_3dgs:
             self.gaussians.spatial_lr_scale = self.cameras_extent
             print("[Firerat Hint] input pointcloud path is ignored.")
