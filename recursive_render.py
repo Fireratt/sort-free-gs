@@ -4,7 +4,10 @@
 This entry point uses this repository's Scene, GaussianModel and
 gaussian_renderer.render APIs. It does not depend on the distributed Grendel
 renderer that the previous version of this file imported.
-"""
+
+e.g.
+ python recursive_render.py --recursive /home/ps/hjf/3dgs/res/training/deep-blending \
+--iteration 10000 --resolutions 1.0 0.5 3840x2160 2>&1"""
 
 import argparse
 import csv
