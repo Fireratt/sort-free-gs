@@ -1,0 +1,61 @@
+# CUDA development/runtime image for sort-free-gs.
+#
+# This image is intentionally independent from Grendel-GS.  Both projects use
+# packages with the same Python names (notably diff_gaussian_rasterization),
+# but their CUDA/Python interfaces are different.  Do not copy Grendel's
+# compiled extensions into this image.
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    CUDA_HOME=/usr/local/cuda-12.4 \
+    CUDA_ROOT=/usr/local/cuda-12.4 \
+    CUDA_PATH=/usr/local/cuda-12.4 \
+    CC=gcc-11 \
+    CXX=g++-11 \
+    CUDAHOSTCXX=g++-11 \
+    MAX_JOBS=2
+
+# Override this at build time for a specific GPU, for example:
+# --build-arg TORCH_CUDA_ARCH_LIST="8.6"
+ARG TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0+PTX"
+ENV TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}
+
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+WORKDIR /workspace/sort-free-gs
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl git build-essential gcc-11 g++-11 \
+        libgl1 libglib2.0-0 libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pin the Conda installer for reproducible image builds.
+RUN curl -fsSL \
+        https://github.com/conda-forge/miniforge/releases/download/24.3.0-0/Miniforge3-24.3.0-0-Linux-x86_64.sh \
+        -o /tmp/miniforge.sh \
+    && bash /tmp/miniforge.sh -b -p /opt/conda \
+    && rm /tmp/miniforge.sh
+
+COPY environment.yml /tmp/sortfree-environment.yml
+RUN conda env create --file /tmp/sortfree-environment.yml \
+    && conda clean --all --yes
+
+# Make the sortfree environment the default Python environment in the image.
+ENV PATH=/opt/conda/envs/sortfree/bin:/opt/conda/bin:${PATH}
+
+COPY . /workspace/sort-free-gs
+
+# Build only the CUDA extensions belonging to sort-free-gs.  In particular,
+# do not run Grendel's build.sh or install its gsplat/rasterizer extensions.
+RUN if [[ ! -x "${CUDA_HOME}/bin/nvcc" && ! -e "${CUDA_HOME}" ]]; then \
+        ln -s /usr/local/cuda "${CUDA_HOME}"; \
+    fi \
+    && test -x "${CUDA_HOME}/bin/nvcc" \
+    && nvcc --version \
+    && python -c 'import torch; print("PyTorch:", torch.__version__); print("PyTorch CUDA:", torch.version.cuda)' \
+    && python -m pip install --no-build-isolation ./submodules/simple-knn \
+    && python -m pip install --no-build-isolation ./submodules/diff-gaussian-rasterization \
+    && python -c 'from diff_gaussian_rasterization import GaussianRasterizationSettings, GaussianRasterizer; import simple_knn; print("sort-free CUDA extensions installed")'
+
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+CMD ["bash"]

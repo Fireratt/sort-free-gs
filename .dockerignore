@@ -1,0 +1,15 @@
+.git
+.gitmodules
+__pycache__
+*.pyc
+*.so
+*.egg-info
+**/build
+output
+trained
+conda
+*.log
+*.mp4
+*.png
+*.jpg
+*.jpeg

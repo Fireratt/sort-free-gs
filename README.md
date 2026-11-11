@@ -95,6 +95,69 @@ For GPUs other than RTX 3090, change `TORCH_CUDA_ARCH_LIST` or omit it.
 python -c "import simple_knn; from diff_gaussian_rasterization import GaussianRasterizer; print('extensions ok')"
 ```
 
+### Docker
+
+For a reproducible CUDA environment, build the included
+`Dockerfile.sortfree-runner` from the repository root. The image creates the
+`sortfree` Conda environment and compiles both CUDA extensions inside the
+container.
+
+```shell
+docker build \
+  --build-arg TORCH_CUDA_ARCH_LIST="8.6" \
+  -f Dockerfile.sortfree-runner \
+  -t sortfree-gs:cuda124 .
+```
+
+Use the architecture matching the target GPU. For an image supporting several
+GPU generations, omit `--build-arg TORCH_CUDA_ARCH_LIST` and use the default
+architecture list in the Dockerfile. The host requires a working NVIDIA
+driver and NVIDIA Container Toolkit.
+
+Start a container with the dataset and output directories mounted. Keeping
+datasets and checkpoints outside the image avoids rebuilding the image when
+the data changes.
+
+```shell
+docker run --rm --gpus all --ipc=host -it \
+  -v /path/to/datasets:/data \
+  -v /path/to/outputs:/workspace/sort-free-gs/output \
+  sortfree-gs:cuda124
+```
+
+Verify the CUDA extensions inside the container:
+
+```shell
+python -c "import torch, simple_knn; from diff_gaussian_rasterization import GaussianRasterizer; print(torch.__version__, torch.version.cuda, torch.cuda.is_available()); print('extensions ok')"
+```
+
+The container starts in `/workspace/sort-free-gs` with the `sortfree` Python
+environment enabled through `PATH`, so the normal training and rendering
+commands can be used directly:
+
+```shell
+python train.py --eval \
+  -s /data/<dataset> \
+  -m /workspace/sort-free-gs/output/<scene> \
+  --depth_correct
+
+./render.sh \
+  /data/<dataset> \
+  /workspace/sort-free-gs/output/<scene> \
+  -1 1.0 3840x2160
+```
+
+The arguments after the model path in `render.sh` are, in order:
+
+```text
+iteration opacity resolution
+```
+
+`-1` selects the latest checkpoint, `1.0` keeps the trained opacity, and
+`3840x2160` requests an explicit 4K output size. The resolution can also be a
+positive integer to specify a target width, or `-1` to use the default
+resolution behavior.
+
 ## Data
 
 First, create a ``data/`` folder inside the project path by
@@ -142,7 +205,7 @@ The convenience script defaults to `../res/training/tanksandtemples/train` and w
 
 ```shell
 ./train.sh <path to COLMAP or NeRF Synthetic dataset> <path to output>
-./render.sh <path to COLMAP or NeRF Synthetic dataset> <path to output root> <iteration>
+./render.sh <dataset_path> <model_path> <iteration> [opacity] [resolution]
 ```
 
 
