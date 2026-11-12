@@ -112,7 +112,8 @@ docker build \
 Use the architecture matching the target GPU. For an image supporting several
 GPU generations, omit `--build-arg TORCH_CUDA_ARCH_LIST` and use the default
 architecture list in the Dockerfile. The host requires a working NVIDIA
-driver and NVIDIA Container Toolkit.
+driver, Docker, and NVIDIA Container Toolkit. Conda is installed inside the
+image; it is not required on the host.
 
 Start a container with the dataset and output directories mounted. Keeping
 datasets and checkpoints outside the image avoids rebuilding the image when

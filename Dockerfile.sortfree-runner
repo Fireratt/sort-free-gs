@@ -35,12 +35,14 @@ RUN curl -fsSL \
     && bash /tmp/miniforge.sh -b -p /opt/conda \
     && rm /tmp/miniforge.sh
 
+ENV PATH=/opt/conda/bin:${PATH}
+
 COPY environment.yml /tmp/sortfree-environment.yml
 RUN conda env create --file /tmp/sortfree-environment.yml \
     && conda clean --all --yes
 
 # Make the sortfree environment the default Python environment in the image.
-ENV PATH=/opt/conda/envs/sortfree/bin:/opt/conda/bin:${PATH}
+ENV PATH=/opt/conda/envs/sortfree/bin:${PATH}
 
 COPY . /workspace/sort-free-gs
 
