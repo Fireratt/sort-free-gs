@@ -65,7 +65,8 @@ def getNerfppNorm(cam_info):
 
     return {"translate": translate, "radius": radius}
 
-def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
+def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder,
+                      load_images=True, camera_resolution=None):
     cam_infos = []
     for idx, key in enumerate(cam_extrinsics):
         sys.stdout.write('\r')
@@ -96,10 +97,11 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
 
         image_path = os.path.join(images_folder, os.path.basename(extr.name))
         image_name = os.path.basename(image_path).split(".")[0]
-        image = Image.open(image_path)
-        width, height = image.size
-        image.close()
-        image = None
+        if load_images:
+            with Image.open(image_path) as image:
+                width, height = image.size
+        elif camera_resolution is not None:
+            width, height = camera_resolution
 
         cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=None,
                               image_path=image_path, image_name=image_name, width=width, height=height)
@@ -132,7 +134,8 @@ def storePly(path, xyz, rgb):
     ply_data = PlyData([vertex_element])
     ply_data.write(path)
 
-def readColmapSceneInfo(path, images, eval, llffhold=8):
+def readColmapSceneInfo(path, images, eval, llffhold=8, load_images=True,
+                        camera_resolution=None, load_point_cloud=True):
     try:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
@@ -145,7 +148,10 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
         cam_intrinsics = read_intrinsics_text(cameras_intrinsic_file)
 
     reading_dir = "images" if images == None else images
-    cam_infos_unsorted = readColmapCameras(cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, images_folder=os.path.join(path, reading_dir))
+    cam_infos_unsorted = readColmapCameras(
+        cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics,
+        images_folder=os.path.join(path, reading_dir), load_images=load_images,
+        camera_resolution=camera_resolution)
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
     if eval:
@@ -160,17 +166,19 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
     ply_path = os.path.join(path, "sparse/0/points3D.ply")
     bin_path = os.path.join(path, "sparse/0/points3D.bin")
     txt_path = os.path.join(path, "sparse/0/points3D.txt")
-    if not os.path.exists(ply_path):
+    if load_point_cloud and not os.path.exists(ply_path):
         print("Converting point3d.bin to .ply, will happen only the first time you open the scene.")
         try:
             xyz, rgb, _ = read_points3D_binary(bin_path)
         except:
             xyz, rgb, _ = read_points3D_text(txt_path)
         storePly(ply_path, xyz, rgb)
-    try:
-        pcd = fetchPly(ply_path)
-    except:
-        pcd = None
+    pcd = None
+    if load_point_cloud:
+        try:
+            pcd = fetchPly(ply_path)
+        except:
+            pass
 
     scene_info = SceneInfo(point_cloud=pcd,
                            train_cameras=train_cam_infos,
@@ -180,7 +188,8 @@ def readColmapSceneInfo(path, images, eval, llffhold=8):
     return scene_info
 
 # Support MatrixCity
-def readCamerasFromTransforms(path, transformsfile, white_background, extension=".png"):
+def readCamerasFromTransforms(path, transformsfile, white_background, extension=".png",
+                              load_images=True, camera_resolution=None):
     cam_infos = []
 
     with open(os.path.join(path, transformsfile)) as json_file:
@@ -205,10 +214,22 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
 
             image_path = cam_name
             image_name = Path(cam_name).stem
-            image = Image.open(image_path)
-            width, height = image.size
-            image.close()
-            image = None
+            if load_images:
+                with Image.open(image_path) as image:
+                    width, height = image.size
+            else:
+                width = frame.get("w", contents.get("w"))
+                height = frame.get("h", contents.get("h"))
+                if width is None or height is None:
+                    if camera_resolution is None:
+                        raise ValueError(
+                            f"{transformsfile} does not specify w and h; "
+                            "provide --camera-resolution WIDTHxHEIGHT for FPS testing"
+                        )
+                    width, height = camera_resolution
+                width, height = int(width), int(height)
+                if width <= 0 or height <= 0:
+                    raise ValueError(f"Invalid camera dimensions in {transformsfile}: {width}x{height}")
 
             fovy = focal2fov(fov2focal(fovx, width), height)
             FovY = fovy
@@ -231,11 +252,13 @@ def readCamerasFromTransforms(path, transformsfile, white_background, extension=
 
     return cam_infos
 
-def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
+def readNerfSyntheticInfo(path, white_background, eval, extension=".png",
+                          load_images=True, camera_resolution=None,
+                          load_point_cloud=True):
     print("Reading Training Transforms")
-    train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", white_background, extension)
+    train_cam_infos = readCamerasFromTransforms(path, "transforms_train.json", white_background, extension, load_images, camera_resolution)
     print("Reading Test Transforms")
-    test_cam_infos = readCamerasFromTransforms(path, "transforms_test.json", white_background, extension)
+    test_cam_infos = readCamerasFromTransforms(path, "transforms_test.json", white_background, extension, load_images, camera_resolution)
     
     if not eval:
         train_cam_infos.extend(test_cam_infos)
@@ -244,7 +267,7 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
     nerf_normalization = getNerfppNorm(train_cam_infos)
 
     ply_path = os.path.join(path, "points3d.ply")
-    if not os.path.exists(ply_path):
+    if load_point_cloud and not os.path.exists(ply_path):
         # Since this data set has no colmap data, we start with random points
         num_pts = 100_000
         print(f"Generating random point cloud ({num_pts})...")
@@ -255,10 +278,12 @@ def readNerfSyntheticInfo(path, white_background, eval, extension=".png"):
         pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
 
         storePly(ply_path, xyz, SH2RGB(shs) * 255)
-    try:
-        pcd = fetchPly(ply_path)
-    except:
-        pcd = None
+    pcd = None
+    if load_point_cloud:
+        try:
+            pcd = fetchPly(ply_path)
+        except:
+            pass
 
     scene_info = SceneInfo(point_cloud=pcd,
                            train_cameras=train_cam_infos,

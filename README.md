@@ -159,6 +159,66 @@ iteration opacity resolution
 positive integer to specify a target width, or `-1` to use the default
 resolution behavior.
 
+### FPS benchmark without reference images
+
+`recursive_render.py` benchmarks a trained model without reading reference
+images, saving rendered images, or computing image-quality metrics. It writes
+FPS and frame latency statistics to CSV. The benchmark uses one GPU; run it
+with the `sortfree` environment or inside the Docker container.
+
+For a single COLMAP scene, provide the camera files under `sparse/0/` and a
+trained model root containing `cfg_args` and
+`point_cloud/iteration_<iteration>/point_cloud.ply`. The camera files are
+`cameras.bin` and `images.bin`, or their `.txt` equivalents. Neither the
+reference images nor the COLMAP initial point cloud are needed:
+
+```shell
+python recursive_render.py /data/scene /workspace/sort-free-gs/output/scene \
+  --iteration -1 --resolutions 3840x2160 --warmup-frames 2 --repeats 10 \
+  --csv /workspace/sort-free-gs/output/scene/fps.csv
+```
+
+For a directory of datasets, add `--recursive` and pass the dataset root and
+model root. Direct child scenes map to model directories of the same name:
+
+```shell
+python recursive_render.py --recursive /data/datasets /workspace/sort-free-gs/output \
+  --iteration -1 --resolutions 1920x1080 3840x2160 \
+  --csv /workspace/sort-free-gs/output/recursive_render_fps.csv
+```
+
+Without a separate model root, recursive mode looks for `trained/` inside each
+scene. `--iteration -1` selects the latest saved PLY. The CSV records the
+actual split, resolution, frame count, FPS, latency statistics and any
+per-scene errors. A failed scene does not prevent later scenes from being
+tested, but causes a nonzero exit status.
+
+By default, COLMAP cameras are sorted by image name and indices `0, 8, 16, ...`
+form the test split. Blender uses the order in `transforms_test.json`.
+`--split train` benchmarks training cameras; if the test split is empty, the
+script falls back to training cameras and reports `train` in the CSV. The
+default is two warmup frames followed by one traversal of the selected split;
+`--repeats` changes the number of timed traversals.
+
+COLMAP camera dimensions come from `cameras.bin` or `cameras.txt`; Blender
+requires `w` and `h` in its transform JSON files, either per frame or at the
+top level. If Blender metadata lacks them, supply the original image dimensions
+with `--camera-resolution WIDTHxHEIGHT`, for example:
+
+```shell
+python recursive_render.py /data/blender_scene /workspace/sort-free-gs/output/scene \
+  --camera-resolution 800x800 --resolutions 3840x2160 --csv /workspace/sort-free-gs/output/scene/fps.csv
+```
+
+`--camera-resolution` also overrides COLMAP dimensions, which is useful when
+the training images were resized relative to COLMAP's original camera size.
+It describes the source images, not the output: choose dimensions matching the
+training images to preserve their camera geometry and base resolution.
+`--resolutions` controls output size using explicit `WIDTHxHEIGHT` values or
+scale factors relative to the loaded camera resolution. The configured training
+`resolution` setting is applied to the source dimensions before these scales.
+The selected cameras must have the same base resolution.
+
 ## Data
 
 First, create a ``data/`` folder inside the project path by

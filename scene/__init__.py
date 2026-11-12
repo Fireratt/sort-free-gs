@@ -23,7 +23,7 @@ class Scene:
 
     gaussians : GaussianModel
 
-    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0]):
+    def __init__(self, args : ModelParams, gaussians : GaussianModel, load_iteration=None, shuffle=True, resolution_scales=[1.0], load_images=True, camera_resolution=None):
         """b
         :param path: Path to colmap scene main folder.
         """
@@ -42,10 +42,16 @@ class Scene:
         self.test_cameras = {}
 
         if os.path.exists(os.path.join(args.source_path, "sparse")):
-            scene_info = sceneLoadTypeCallbacks["Colmap"](args.source_path, args.images, args.eval)
+            scene_info = sceneLoadTypeCallbacks["Colmap"](
+                args.source_path, args.images, args.eval, load_images=load_images,
+                camera_resolution=camera_resolution,
+                load_point_cloud=load_images or not bool(self.loaded_iter))
         elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
             print("Found transforms_train.json file, assuming Blender data set!")
-            scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.eval)
+            scene_info = sceneLoadTypeCallbacks["Blender"](
+                args.source_path, args.white_background, args.eval, load_images=load_images,
+                camera_resolution=camera_resolution,
+                load_point_cloud=load_images or not bool(self.loaded_iter))
         else:
             raise ValueError(f"Could not recognize scene type at {args.source_path}. Expected COLMAP data with sparse/ or Blender data with transforms_train.json.")
 

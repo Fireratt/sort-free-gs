@@ -195,6 +195,7 @@ def render_dataset(
     eval_mode: bool,
     warmup_frames: int,
     repeats: int,
+    camera_resolution=None,
 ):
     iteration = resolve_iteration(model_path, requested_iteration)
     args = load_model_args(source_path, model_path, eval_mode)
@@ -203,7 +204,8 @@ def render_dataset(
 
     with torch.inference_mode():
         gaussians = GaussianModel(dataset_args.sh_degree, dataset_args.depth_correct)
-        scene = Scene(dataset_args, gaussians, load_iteration=iteration, shuffle=False)
+        scene = Scene(dataset_args, gaussians, load_iteration=iteration, shuffle=False,
+                      load_images=False, camera_resolution=camera_resolution)
 
         if split == "test":
             views = scene.getTestCameras()
@@ -220,7 +222,10 @@ def render_dataset(
         background_color = [1, 1, 1] if dataset_args.white_background else [0, 0, 0]
         background = torch.tensor(background_color, dtype=torch.float32, device="cuda")
         results = []
+        original_sizes = [(view.image_width, view.image_height) for view in views]
         for spec in resolution_specs:
+            for view, (width, height) in zip(views, original_sizes):
+                view.image_width, view.image_height = width, height
             result = benchmark_resolution(
                 views,
                 gaussians,
@@ -295,11 +300,25 @@ def main():
     )
     parser.add_argument("--warmup-frames", type=int, default=2)
     parser.add_argument("--repeats", type=int, default=1)
+    parser.add_argument(
+        "--camera-resolution", metavar="WIDTHxHEIGHT",
+        help="Source image dimensions for camera geometry (required for Blender if w/h are missing; overrides COLMAP dimensions).",
+    )
     parser.add_argument("--quiet", action="store_true")
     cli_args = parser.parse_args()
 
     if cli_args.repeats <= 0:
         parser.error("--repeats must be positive")
+    camera_resolution = None
+    if cli_args.camera_resolution:
+        try:
+            spec = cli_args.camera_resolution.lower()
+            width, height = (int(part) for part in spec.split("x"))
+            if width <= 0 or height <= 0:
+                raise ValueError
+            camera_resolution = (width, height)
+        except ValueError:
+            parser.error("--camera-resolution must be WIDTHxHEIGHT with positive integers")
     if not torch.cuda.is_available():
         raise RuntimeError(
             "recursive_render.py requires CUDA, as does sort-free-gs rendering."
@@ -357,6 +376,7 @@ def main():
                 not cli_args.no_eval,
                 cli_args.warmup_frames,
                 cli_args.repeats,
+                camera_resolution,
             )
             rows.extend(
                 result_row(dataset_path, model_path, iteration, actual_split, result)
