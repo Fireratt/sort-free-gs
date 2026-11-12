@@ -71,7 +71,9 @@ def resolve_resolution(spec, base_width, base_height):
 
 def load_model_args(source_path: Path, model_path: Path, eval_mode: bool):
     parser = argparse.ArgumentParser(add_help=False)
-    ModelParams(parser, sentinel=True)
+    # This parser supplies real defaults for older or missing training configs.
+    # Sentinel defaults are only appropriate when merging CLI overrides.
+    ModelParams(parser)
     PipelineParams(parser)
     args = parser.parse_args([])
 
@@ -79,8 +81,14 @@ def load_model_args(source_path: Path, model_path: Path, eval_mode: bool):
     if cfg_path.is_file():
         cfg_args = eval(cfg_path.read_text(), {"Namespace": Namespace})
         values = vars(args).copy()
-        values.update(vars(cfg_args))
+        values.update({key: value for key, value in vars(cfg_args).items() if value is not None})
         args = Namespace(**values)
+    else:
+        print(
+            f"[WARNING] Training config not found: {cfg_path}. "
+            "Using default model parameters (including sh_degree=3 and "
+            "depth_correct=False); confirm these match the trained model."
+        )
 
     args.source_path = str(source_path.resolve())
     args.model_path = str(model_path.resolve())
